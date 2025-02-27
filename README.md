@@ -1,7 +1,7 @@
 # The Bitcoin Dev Kit
 
 <div align="center">
-  <h1>BDK</h1>
+  <h1>BDK Wallet</h1>
 
   <img src="./static/bdk.png" width="220" />
 
@@ -28,18 +28,17 @@
 
 ## About
 
-The `bdk` libraries aims to provide well engineered and reviewed components for Bitcoin based applications.
+The `bdk_wallet` project aims to provide a well engineered and reviewed library for building Bitcoin based applications.
 It is built upon the excellent [`rust-bitcoin`] and [`rust-miniscript`] crates.
-
-> ⚠ The Bitcoin Dev Kit developers are in the process of releasing a `v1.0` which is a fundamental re-write of how the library works.
-> See for some background on this project: https://bitcoindevkit.org/blog/road-to-bdk-1/ (ignore the timeline 😁)
-> For a release timeline see the [`BDK 1.0 project page`].
 
 ## Architecture
 
-The project is split up into several crates in the `/crates` directory:
+There is currently only one crate in this repository:
 
-- [`wallet`](./crates/wallet): Contains the central high level `Wallet` type that is built from the low-level mechanisms provided by the other components
+[`bdk_wallet`](./crates/wallet): Contains the central high level `Wallet` type that is built from the low-level mechanisms provided by components it depends on.
+
+Crates that `bdk_wallet` depends on are found in the [`bdk`](https://github.com/bitcoindevkit/bdk) repository:
+
 - [`chain`](./crates/chain): Tools for storing and indexing chain data
 - [`persist`](./crates/persist): Types that define data persistence of a BDK wallet
 - [`file_store`](./crates/file_store): A (experimental) persistence backend for storing chain data in a single file.
@@ -47,15 +46,11 @@ The project is split up into several crates in the `/crates` directory:
 - [`electrum`](./crates/electrum): Extends the [`electrum-client`] crate with methods to fetch chain data from an electrum server in the form that [`bdk_chain`] and `Wallet` can consume.
 
 Fully working examples of how to use these components are in `/example-crates`:
-- [`example_cli`](./example-crates/example_cli): Library used by the `example_*` crates. Provides utilities for syncing, showing the balance, generating addresses and creating transactions without using the bdk_wallet `Wallet`.
-- [`example_electrum`](./example-crates/example_electrum): A command line Bitcoin wallet application built on top of `example_cli` and the `electrum` crate. It shows the power of the bdk tools (`chain` + `file_store` + `electrum`), without depending on the main `bdk_wallet` library.
-- [`example_esplora`](./example-crates/example_esplora): A command line Bitcoin wallet application built on top of `example_cli` and the `esplora` crate. It shows the power of the bdk tools (`chain` + `file_store` + `esplora`), without depending on the main `bdk_wallet` library.
-- [`example_bitcoind_rpc_polling`](./example-crates/example_bitcoind_rpc_polling): A command line Bitcoin wallet application built on top of `example_cli` and the `bitcoind_rpc` crate. It shows the power of the bdk tools (`chain` + `file_store` + `bitcoind_rpc`), without depending on the main `bdk_wallet` library.
-- [`wallet_esplora_blocking`](./example-crates/wallet_esplora_blocking): Uses the `Wallet` to sync and spend using the Esplora blocking interface.
-- [`wallet_esplora_async`](./example-crates/wallet_esplora_async): Uses the `Wallet` to sync and spend using the Esplora asynchronous interface.
-- [`wallet_electrum`](./example-crates/wallet_electrum): Uses the `Wallet` to sync and spend using Electrum.
+- [`example_wallet_electrum`](./example-crates/example_wallet_electrum): Uses the `Wallet` to sync and spend using Electrum.
+- [`example_wallet_esplora_async`](./example-crates/example_wallet_esplora_async): Uses the `Wallet` to sync and spend using the Esplora asynchronous interface.
+- [`example_wallet_esplora_blocking`](./example-crates/example_wallet_esplora_blocking): Uses the `Wallet` to sync and spend using the Esplora blocking interface.
+- [`example_wallet_rpc`](./example-crates/example_wallet_rpc): Uses the `Wallet` to sync and spend using a bitcoin core full node and the RPC interface.
 
-[`BDK 1.0 project page`]: https://github.com/orgs/bitcoindevkit/projects/14
 [`rust-miniscript`]: https://github.com/rust-bitcoin/rust-miniscript
 [`rust-bitcoin`]: https://github.com/rust-bitcoin/rust-bitcoin
 [`esplora-client`]: https://docs.rs/esplora-client/
@@ -63,17 +58,8 @@ Fully working examples of how to use these components are in `/example-crates`:
 [`bdk_chain`]: https://docs.rs/bdk-chain/
 
 ## Minimum Supported Rust Version (MSRV)
-The BDK library maintains a MSRV of 1.63.0. This includes the following crates:
 
-- `bdk_core`
-- `bdk_chain`
-- `bdk_bitcoind_rpc`.
-- `bdk_esplora`.
-- `bdk_wallet`.
-
-The MSRV of `bdk_electrum` is 1.75.0.
-
-To build with the MSRV of 1.63.0 you will need to pin dependencies by running the [`pin-msrv.sh`](./ci/pin-msrv.sh) script.
+The libraries in this repository maintains a MSRV of 1.63.0. 
 
 ## License
 
