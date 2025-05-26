@@ -226,9 +226,9 @@ pub enum LoadMismatch {
         /// Keychain identifying the descriptor.
         keychain: KeychainKind,
         /// The loaded descriptor.
-        loaded: Option<ExtendedDescriptor>,
+        loaded: Box<Option<ExtendedDescriptor>>,
         /// The expected descriptor.
-        expected: Option<ExtendedDescriptor>,
+        expected: Box<Option<ExtendedDescriptor>>,
     },
 }
 
@@ -258,11 +258,9 @@ impl fmt::Display for LoadMismatch {
                     f,
                     "Descriptor mismatch for {} keychain: loaded {}, expected {}",
                     keychain,
-                    loaded
-                        .as_ref()
-                        .map_or("None".to_string(), |d| d.to_string()),
+                    loaded.clone().map_or("None".to_string(), |d| d.to_string()),
                     expected
-                        .as_ref()
+                        .clone()
                         .map_or("None".to_string(), |d| d.to_string())
                 )
             }
@@ -278,7 +276,7 @@ impl From<LoadMismatch> for LoadError {
 
 impl<E> From<LoadMismatch> for LoadWithPersistError<E> {
     fn from(mismatch: LoadMismatch) -> Self {
-        Self::InvalidChangeSet(LoadError::Mismatch(mismatch))
+        Self::InvalidChangeSet(Box::new(LoadError::Mismatch(mismatch)))
     }
 }
 
@@ -559,8 +557,8 @@ impl Wallet {
                 if descriptor.descriptor_id() != exp_desc.descriptor_id() {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::External,
-                        loaded: Some(descriptor),
-                        expected: Some(exp_desc),
+                        loaded: Box::new(Some(descriptor)),
+                        expected: Box::new(Some(exp_desc)),
                     }));
                 }
                 if params.extract_keys {
@@ -569,8 +567,8 @@ impl Wallet {
             } else {
                 return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                     keychain: KeychainKind::External,
-                    loaded: Some(descriptor),
-                    expected: None,
+                    loaded: Box::new(Some(descriptor)),
+                    expected: Box::new(None),
                 }));
             }
         }
@@ -588,8 +586,8 @@ impl Wallet {
                     let (exp_desc, _) = make_desc(&secp, network).map_err(LoadError::Descriptor)?;
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
-                        loaded: None,
-                        expected: Some(exp_desc),
+                        loaded: Box::new(None),
+                        expected: Box::new(Some(exp_desc)),
                     }));
                 }
             }
@@ -603,8 +601,8 @@ impl Wallet {
                 None => {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
-                        loaded: Some(desc),
-                        expected: None,
+                        loaded: Box::new(Some(desc)),
+                        expected: Box::new(None),
                     }))
                 }
                 // parameters must match
@@ -615,8 +613,8 @@ impl Wallet {
                     if desc.descriptor_id() != exp_desc.descriptor_id() {
                         return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                             keychain: KeychainKind::Internal,
-                            loaded: Some(desc),
-                            expected: Some(exp_desc),
+                            loaded: Box::new(Some(desc)),
+                            expected: Box::new(Some(exp_desc)),
                         }));
                     }
                     if params.extract_keys {
