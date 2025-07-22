@@ -882,7 +882,7 @@ mod test {
 
         assert_matches!(result, Err(DescriptorError::HardenedDerivationXpub));
 
-        // Valid 2-path multipath descriptor should now pass
+        // Valid 2-path multipath descriptor should pass
         let descriptor = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/<0;1>/*)";
         let (descriptor, _) = descriptor
             .into_wallet_descriptor(&secp, Network::Testnet)
@@ -977,37 +977,5 @@ mod test {
             .unwrap_err();
 
         Ok(())
-    }
-
-    #[test]
-    fn test_multipath_descriptor_validation() {
-        let secp = Secp256k1::new();
-
-        // Test that 2-path multipath descriptor passes validation
-        let descriptor_str = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1>/*)";
-        let (descriptor, _) = descriptor_str
-            .into_wallet_descriptor(&secp, Network::Testnet)
-            .expect("should parse 2-path multipath descriptor");
-
-        let result = check_wallet_descriptor(&descriptor);
-        assert!(result.is_ok());
-
-        // Test that 1-path descriptor (non-multipath) still works
-        let descriptor_str = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/0/*)";
-        let (descriptor, _) = descriptor_str
-            .into_wallet_descriptor(&secp, Network::Testnet)
-            .expect("should parse single-path descriptor");
-
-        let result = check_wallet_descriptor(&descriptor);
-        assert!(result.is_ok());
-
-        // Test that 3-path multipath descriptor fails validation
-        let descriptor_str = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1;2>/*)";
-        let (descriptor, _) = descriptor_str
-            .into_wallet_descriptor(&secp, Network::Testnet)
-            .expect("should parse 3-path multipath descriptor");
-
-        let result = check_wallet_descriptor(&descriptor);
-        assert!(matches!(result, Err(DescriptorError::MultiPath)));
     }
 }
