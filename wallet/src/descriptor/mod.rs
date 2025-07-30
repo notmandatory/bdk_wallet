@@ -14,6 +14,7 @@
 //! This module contains generic utilities to work with descriptors, plus some re-exported types
 //! from [`miniscript`].
 
+use crate::alloc::string::ToString;
 use crate::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -312,14 +313,11 @@ pub(crate) fn check_wallet_descriptor(
     }
 
     if descriptor.is_multipath() {
-        // Only allow multipath descriptors with exactly 2 paths (receive and change)
-        let paths = descriptor
-            .clone()
-            .into_single_descriptors()
-            .map_err(|_| DescriptorError::MultiPath)?;
-        if paths.len() != 2 {
-            return Err(DescriptorError::MultiPath);
-        }
+        return Err(DescriptorError::Miniscript(
+            miniscript::Error::BadDescriptor(
+                "`check_wallet_descriptor` must not contain multipath keys".to_string(),
+            ),
+        ));
     }
 
     // Run miniscript's sanity check, which will look for duplicated keys and other potential
@@ -882,23 +880,19 @@ mod test {
 
         assert_matches!(result, Err(DescriptorError::HardenedDerivationXpub));
 
-        // Valid 2-path multipath descriptor should pass
+        // Any multipath descriptor should fail
         let descriptor = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/<0;1>/*)";
         let (descriptor, _) = descriptor
             .into_wallet_descriptor(&secp, Network::Testnet)
             .expect("must parse");
         let result = check_wallet_descriptor(&descriptor);
 
-        assert!(result.is_ok());
-
-        // Invalid 3-path multipath descriptor should fail
-        let descriptor = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/<0;1;2>/*)";
-        let (descriptor, _) = descriptor
-            .into_wallet_descriptor(&secp, Network::Testnet)
-            .expect("must parse");
-        let result = check_wallet_descriptor(&descriptor);
-
-        assert_matches!(result, Err(DescriptorError::MultiPath));
+        assert_matches!(
+            result,
+            Err(DescriptorError::Miniscript(
+                miniscript::Error::BadDescriptor(_)
+            ))
+        );
 
         // repeated pubkeys
         let descriptor = "wsh(multi(2,tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0/*,tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0/*))";
