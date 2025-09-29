@@ -7,6 +7,21 @@ Contributors do not need to change this file but do need to add changelog detail
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wallet-2.2.0]
+
+### Added
+
+- feat: Return wallet events when applying updates #310
+- feat: (Backport #300) - Add utilities to test persistence #311
+- docs: (Backport #306) - docs: add wording on required use of xpub for multipath constructor #309
+- docs: add metadata fields to issue templates for triage #296
+
+### Changed 
+
+- ci: automated update to rustc 1.89.0 #298
+
+\***Note that the `signer` module has been deprecated and is planned to be removed in a future release.**\*
+
 ## [wallet-2.1.0]
 
 ### Added
@@ -1330,3 +1345,4 @@ final transaction is created by calling `finish` on the builder.
 [wallet-2.0.0-beta.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.0.0-beta.0
 [wallet-2.0.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.0.0
 [wallet-2.1.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.1.0
+[wallet-2.2.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.2.0
