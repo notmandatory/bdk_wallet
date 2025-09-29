@@ -56,6 +56,10 @@ pub mod event;
 pub mod export;
 mod params;
 mod persisted;
+#[deprecated(
+    since = "2.2.0",
+    note = "PSBT signing was moved to `bitcoin::psbt` module"
+)]
 pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;

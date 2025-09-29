@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime};
 use bdk_wallet::event::WalletEvent;
 use bdk_wallet::test_utils::{get_test_wpkh_and_change_desc, new_wallet_and_funding_update};

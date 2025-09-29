@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use bdk_electrum::electrum_client;
 use bdk_electrum::BdkElectrumClient;
 use bdk_wallet::bitcoin::Amount;

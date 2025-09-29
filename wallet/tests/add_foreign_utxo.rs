@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::str::FromStr;
 
 use bdk_wallet::psbt::PsbtUtils;
