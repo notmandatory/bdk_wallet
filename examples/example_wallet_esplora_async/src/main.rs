@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use anyhow::Ok;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::{

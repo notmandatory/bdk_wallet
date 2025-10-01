@@ -9,6 +9,7 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
+#![allow(deprecated)]
 extern crate bdk_wallet;
 use std::error::Error;
 

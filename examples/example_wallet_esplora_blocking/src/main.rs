@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use bdk_esplora::{esplora_client, EsploraExt};
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
