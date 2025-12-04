@@ -7,6 +7,17 @@ Contributors do not need to change this file but do need to add changelog detail
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wallet-2.3.0]
+
+### Added
+
+- feat: add `apply_block_events` and `apply_block_connected_to_events` #336
+
+### Fixed
+
+- fix: (backport #337) - don't fail in `build_fee_bump` for missing parent txid #349
+- ci: pin syn crate to 2.0.106 #338
+
 ## [wallet-2.2.0]
 
 ### Added
@@ -1346,3 +1357,4 @@ final transaction is created by calling `finish` on the builder.
 [wallet-2.0.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.0.0
 [wallet-2.1.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.1.0
 [wallet-2.2.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.2.0
+[wallet-2.3.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.3.0
