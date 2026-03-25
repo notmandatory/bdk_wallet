@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
