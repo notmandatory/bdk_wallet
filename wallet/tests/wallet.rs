@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::str::FromStr;
 use std::sync::Arc;
 

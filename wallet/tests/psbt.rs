@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use bdk_wallet::bitcoin::{Amount, FeeRate, Psbt, TxIn};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{psbt, KeychainKind, SignOptions};
