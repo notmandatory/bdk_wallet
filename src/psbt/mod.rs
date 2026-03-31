@@ -84,8 +84,8 @@ mod tests {
     use super::*;
     use bitcoin::psbt::Input;
     use bitcoin::{
-        absolute, transaction, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
-        Witness,
+        Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, absolute,
+        transaction,
     };
 
     /// Builds a simple transaction with one output of the given value

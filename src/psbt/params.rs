@@ -7,13 +7,13 @@ use core::fmt;
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime, FullTxOut, TxGraph};
 use bdk_tx::{ChangeScript, Input, Output, Selector, SelectorError};
 use bitcoin::{
-    absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
-    Txid,
+    Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction, Txid, absolute,
+    transaction::Version,
 };
 use miniscript::plan::Assets;
 
-use crate::collections::{HashMap, HashSet};
 use crate::TxOrdering;
+use crate::collections::{HashMap, HashSet};
 
 /// Marker type representing the PSBT creation state.
 #[derive(Debug)]
@@ -804,7 +804,7 @@ mod test {
     #[test]
     fn test_replace_strips_conflicting_planned_input() {
         use bdk_tx::Input as BdkInput;
-        use bitcoin::{psbt, Sequence};
+        use bitcoin::{Sequence, psbt};
 
         let parent_op = OutPoint::new(Hash::hash(b"parent"), 0);
 

@@ -2,15 +2,15 @@
 #![cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 
 use bdk_chain::{BlockId, ConfirmationBlockTime};
-use bdk_tx::{bdk_coin_select, ChangeScript};
+use bdk_tx::{ChangeScript, bdk_coin_select};
 use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
-    error::CreatePsbtError, psbt, KeychainKind, PsbtParams, SelectionStrategy, Wallet,
+    KeychainKind, PsbtParams, SelectionStrategy, Wallet, error::CreatePsbtError, psbt,
 };
 use bitcoin::{
-    absolute, hashes::Hash, Amount, FeeRate, Network, OutPoint, ScriptBuf, Sequence, Transaction,
-    TxIn, TxOut,
+    Amount, FeeRate, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, absolute,
+    hashes::Hash,
 };
 use miniscript::plan::Assets;
 
@@ -82,20 +82,25 @@ fn test_create_psbt() {
     // input internal key
     assert!(psbt_input.tap_internal_key.is_some());
     // input key origins
-    assert!(psbt_input
-        .tap_key_origins
-        .values()
-        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b"));
+    assert!(
+        psbt_input
+            .tap_key_origins
+            .values()
+            .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b")
+    );
     // output internal key
-    assert!(psbt
-        .outputs
-        .iter()
-        .any(|output| output.tap_internal_key.is_some()));
+    assert!(
+        psbt.outputs
+            .iter()
+            .any(|output| output.tap_internal_key.is_some())
+    );
     // output key origins
-    assert!(psbt.outputs.iter().any(|output| output
-        .tap_key_origins
-        .values()
-        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b")));
+    assert!(psbt.outputs.iter().any(|output| {
+        output
+            .tap_key_origins
+            .values()
+            .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b")
+    }));
 }
 
 #[test]
@@ -315,8 +320,8 @@ fn test_create_psbt_cltv_timestamp() {
 
 #[test]
 fn test_create_psbt_csv() {
-    use bitcoin::relative;
     use bitcoin::Sequence;
+    use bitcoin::relative;
 
     let desc = get_test_single_sig_csv();
     let mut wallet = Wallet::create_single(desc)
@@ -636,8 +641,8 @@ fn test_replace_by_fee_replaces_descendant_fees() {
 // Test that `replace_by_fee`` rejects a confirmed original tx
 #[test]
 fn test_replace_by_fee_confirmed_tx_error() {
-    use bdk_wallet::error::ReplaceByFeeError;
     use KeychainKind::*;
+    use bdk_wallet::error::ReplaceByFeeError;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let mut wallet = Wallet::create(desc, change_desc)
@@ -699,8 +704,8 @@ fn test_replace_by_fee_confirmed_tx_error() {
 // `remove_utxo`, leaving the replacement with no inputs from the replaced transaction.
 #[test]
 fn test_replace_by_fee_no_inputs_from_original() {
-    use bdk_wallet::error::ReplaceByFeeError;
     use KeychainKind::*;
+    use bdk_wallet::error::ReplaceByFeeError;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let mut wallet = Wallet::create(desc, change_desc)
@@ -777,7 +782,7 @@ fn test_replace_by_fee_no_original_transactions() {
 fn test_replace_by_fee_conflicting_input_descendant() {
     use bdk_tx::Input as BdkInput;
     use bdk_wallet::error::ReplaceByFeeError;
-    use bitcoin::{psbt as btc_psbt, Sequence};
+    use bitcoin::{Sequence, psbt as btc_psbt};
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let mut wallet = Wallet::create(desc, change_desc)
