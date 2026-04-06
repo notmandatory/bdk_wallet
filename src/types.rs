@@ -14,6 +14,8 @@ use chain::{ChainPosition, ConfirmationBlockTime};
 use core::convert::AsRef;
 use core::fmt;
 
+use crate::collections::BTreeMap;
+
 use bitcoin::transaction::{OutPoint, Sequence, TxOut};
 use bitcoin::{psbt, Weight};
 
@@ -138,6 +140,55 @@ impl Utxo {
             Utxo::Local(_) => None,
             Utxo::Foreign { sequence, .. } => Some(*sequence),
         }
+    }
+}
+
+/// The finalization status for a single PSBT input.
+#[derive(Debug, PartialEq)]
+pub enum FinalizeInputOutcome {
+    /// The input was already finalized before this call.
+    AlreadyFinalized,
+    /// The input was successfully finalized during this call.
+    Finalized,
+    /// The wallet could not derive a descriptor for the input.
+    MissingDescriptor,
+    /// The wallet found the descriptor but could not construct the input satisfaction.
+    CouldNotSatisfy(miniscript::Error),
+}
+
+impl FinalizeInputOutcome {
+    /// Whether the input is finalized after this call.
+    pub fn is_finalized(&self) -> bool {
+        matches!(self, Self::AlreadyFinalized | Self::Finalized)
+    }
+}
+
+/// The outcome of a PSBT finalization attempt.
+#[derive(Debug, PartialEq)]
+pub struct FinalizePsbtOutcome {
+    outcomes: BTreeMap<usize, FinalizeInputOutcome>,
+}
+
+impl FinalizePsbtOutcome {
+    pub(crate) fn new(outcomes: BTreeMap<usize, FinalizeInputOutcome>) -> Self {
+        Self { outcomes }
+    }
+
+    /// Whether all inputs are finalized after this call.
+    pub fn is_finalized(&self) -> bool {
+        self.outcomes
+            .values()
+            .all(FinalizeInputOutcome::is_finalized)
+    }
+
+    /// Borrow the per-input finalization outcomes.
+    pub fn outcomes(&self) -> &BTreeMap<usize, FinalizeInputOutcome> {
+        &self.outcomes
+    }
+
+    /// Consume the collection and return the per-input finalization outcomes.
+    pub fn into_outcomes(self) -> BTreeMap<usize, FinalizeInputOutcome> {
+        self.outcomes
     }
 }
 
