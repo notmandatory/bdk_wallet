@@ -1699,6 +1699,56 @@ fn test_try_finalize_psbt_outcomes() {
 }
 
 #[test]
+fn test_try_finalize_psbt_preserves_opaque_input_fields() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+
+    wallet
+        .sign(
+            &mut psbt,
+            SignOptions {
+                try_finalize: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let proprietary_key = bitcoin::psbt::raw::ProprietaryKey {
+        prefix: b"bdk-test".to_vec(),
+        subtype: 0,
+        key: vec![1, 2, 3],
+    };
+    let proprietary_value = vec![4, 5, 6];
+    let unknown_key = bitcoin::psbt::raw::Key {
+        type_value: 0x42,
+        key: vec![7, 8, 9],
+    };
+    let unknown_value = vec![10, 11, 12];
+
+    psbt.inputs[0]
+        .proprietary
+        .insert(proprietary_key.clone(), proprietary_value.clone());
+    psbt.inputs[0]
+        .unknown
+        .insert(unknown_key.clone(), unknown_value.clone());
+
+    let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
+
+    assert!(finalized.is_finalized());
+    assert_eq!(
+        psbt.inputs[0].proprietary.get(&proprietary_key),
+        Some(&proprietary_value)
+    );
+    assert_eq!(
+        psbt.inputs[0].unknown.get(&unknown_key),
+        Some(&unknown_value)
+    );
+}
+
+#[test]
 fn test_try_finalize_psbt_returns_index_out_of_bounds_for_malformed_psbt() {
     {
         let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());

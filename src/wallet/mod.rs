@@ -2009,21 +2009,27 @@ impl Wallet {
                     match satisfy_result {
                         Ok(_) => {
                             let length = psbt.inputs.len();
-                            // Set the UTXO fields, final script_sig and witness
-                            // and clear everything else.
                             let psbt_input = psbt
                                 .inputs
                                 .get_mut(n)
                                 .ok_or(IndexOutOfBoundsError::new(n, length))?;
                             let original = mem::take(psbt_input);
-                            psbt_input.non_witness_utxo = original.non_witness_utxo;
-                            psbt_input.witness_utxo = original.witness_utxo;
-                            if !tmp_input.script_sig.is_empty() {
-                                psbt_input.final_script_sig = Some(tmp_input.script_sig);
-                            }
-                            if !tmp_input.witness.is_empty() {
-                                psbt_input.final_script_witness = Some(tmp_input.witness);
-                            }
+                            let final_script_sig =
+                                (!tmp_input.script_sig.is_empty()).then_some(tmp_input.script_sig);
+                            let final_script_witness =
+                                (!tmp_input.witness.is_empty()).then_some(tmp_input.witness);
+
+                            // BIP174 finalization clears input metadata except UTXOs, final scripts,
+                            // and opaque fields the finalizer does not understand.
+                            *psbt_input = bitcoin::psbt::Input {
+                                non_witness_utxo: original.non_witness_utxo,
+                                witness_utxo: original.witness_utxo,
+                                final_script_sig,
+                                final_script_witness,
+                                proprietary: original.proprietary,
+                                unknown: original.unknown,
+                                ..Default::default()
+                            };
                             outcomes.insert(n, FinalizeInputOutcome::Finalized);
                         }
                         Err(err) => {
