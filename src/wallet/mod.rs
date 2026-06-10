@@ -1922,14 +1922,18 @@ impl Wallet {
             .unwrap_or_else(|| self.chain.tip().height());
 
         Ok(self
-            .try_finalize_psbt_with(psbt, |_, input| {
-                Some((
-                    current_height,
-                    confirmation_heights
-                        .get(&input.previous_output.txid)
-                        .copied(),
-                ))
-            })?
+            .try_finalize_psbt_with(
+                psbt,
+                |_, input| {
+                    Some((
+                        current_height,
+                        confirmation_heights
+                            .get(&input.previous_output.txid)
+                            .copied(),
+                    ))
+                },
+                true,
+            )?
             .is_finalized())
     }
 
@@ -1942,13 +1946,14 @@ impl Wallet {
         &self,
         psbt: &mut Psbt,
     ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError> {
-        self.try_finalize_psbt_with(psbt, |_, _| None)
+        self.try_finalize_psbt_with(psbt, |_, _| None, false)
     }
 
     fn try_finalize_psbt_with<F>(
         &self,
         psbt: &mut Psbt,
         mut wallet_timelocks: F,
+        clear_output_derivations: bool,
     ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError>
     where
         F: FnMut(usize, &bitcoin::TxIn) -> Option<(u32, Option<u32>)>,
@@ -2043,9 +2048,8 @@ impl Wallet {
             }
         }
 
-        // Clear derivation paths from outputs.
         let finalized = FinalizePsbtOutcome::new(outcomes);
-        if finalized.is_finalized() {
+        if clear_output_derivations && finalized.is_finalized() {
             for output in &mut psbt.outputs {
                 output.bip32_derivation.clear();
                 output.tap_key_origins.clear();

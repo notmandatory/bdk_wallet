@@ -1628,10 +1628,15 @@ fn test_try_finalize_psbt_outcomes() {
             )
             .unwrap();
         assert!(!is_final);
+        let output_bip32_derivations = psbt
+            .outputs
+            .iter()
+            .map(|output| output.bip32_derivation.clone())
+            .collect::<Vec<_>>();
         assert!(
-            psbt.outputs
+            output_bip32_derivations
                 .iter()
-                .any(|output| !output.bip32_derivation.is_empty()),
+                .any(|derivation| !derivation.is_empty()),
             "expected wallet-owned outputs to retain derivation data before finalization"
         );
 
@@ -1646,10 +1651,13 @@ fn test_try_finalize_psbt_outcomes() {
             psbt.inputs[0].final_script_sig.is_some()
                 || psbt.inputs[0].final_script_witness.is_some()
         );
-        assert!(psbt
-            .outputs
-            .iter()
-            .all(|output| output.bip32_derivation.is_empty()));
+        assert_eq!(
+            psbt.outputs
+                .iter()
+                .map(|output| output.bip32_derivation.clone())
+                .collect::<Vec<_>>(),
+            output_bip32_derivations
+        );
 
         let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
 
