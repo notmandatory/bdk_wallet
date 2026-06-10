@@ -1937,11 +1937,17 @@ impl Wallet {
             .is_finalized())
     }
 
-    /// Finalize a PSBT and return per-input finalization results. Use this method when you need to
-    /// inspect why a specific input could not be finalized.
+    /// Attempt to finalize each input of a PSBT and return per-input finalization results.
     ///
-    /// The method should only return `Err` when the PSBT is malformed, for example if its inputs
-    /// are out of bounds.
+    /// Use this method when you need to inspect why a specific input could not be finalized. Call
+    /// [`FinalizePsbtOutcome::is_finalized`] on the returned value to check whether all inputs are
+    /// finalized after the call.
+    ///
+    /// Per-input finalization failures are reported as [`FinalizeInputOutcome`] values. This method
+    /// only returns `Err` when the PSBT is malformed, for example if its inputs are out of bounds.
+    ///
+    /// Timelock satisfaction is evaluated from the PSBT transaction fields. This method does not
+    /// redact or clear output metadata.
     pub fn try_finalize_psbt(
         &self,
         psbt: &mut Psbt,
