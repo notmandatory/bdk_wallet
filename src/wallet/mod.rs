@@ -1924,13 +1924,11 @@ impl Wallet {
         Ok(self
             .try_finalize_psbt_with(
                 psbt,
+                Some(current_height),
                 |_, input| {
-                    Some((
-                        current_height,
-                        confirmation_heights
-                            .get(&input.previous_output.txid)
-                            .copied(),
-                    ))
+                    confirmation_heights
+                        .get(&input.previous_output.txid)
+                        .copied()
                 },
                 true,
             )?
@@ -1952,17 +1950,18 @@ impl Wallet {
         &self,
         psbt: &mut Psbt,
     ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError> {
-        self.try_finalize_psbt_with(psbt, |_, _| None, false)
+        self.try_finalize_psbt_with(psbt, None, |_, _| None, false)
     }
 
     fn try_finalize_psbt_with<F>(
         &self,
         psbt: &mut Psbt,
-        mut wallet_timelocks: F,
+        current_height: Option<u32>,
+        mut confirmation_height_for_input: F,
         clear_output_derivations: bool,
     ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError>
     where
-        F: FnMut(usize, &bitcoin::TxIn) -> Option<(u32, Option<u32>)>,
+        F: FnMut(usize, &bitcoin::TxIn) -> Option<u32>,
     {
         let tx = &psbt.unsigned_tx;
         if psbt.inputs.len() < tx.input.len() {
@@ -2002,9 +2001,8 @@ impl Wallet {
             match desc {
                 Some(desc) => {
                     let mut tmp_input = bitcoin::TxIn::default();
-                    let satisfy_result = if let Some((current_height, confirmation_height)) =
-                        wallet_timelocks(n, input)
-                    {
+                    let satisfy_result = if let Some(current_height) = current_height {
+                        let confirmation_height = confirmation_height_for_input(n, input);
                         desc.satisfy(
                             &mut tmp_input,
                             (
