@@ -275,8 +275,8 @@ impl LoadParams {
     ///
     /// # Note
     ///
-    /// You must also specify [`extract_keys`](Self::extract_keys) if you wish to add a signer
-    /// for an expected descriptor containing secrets.
+    /// The provided descriptor may only contain extended public keys (`xpub`) with exactly 2 paths,
+    /// or an error will occur at load time.
     pub fn two_path_descriptor<D>(mut self, expected_descriptor: D) -> Self
     where
         D: IntoWalletDescriptor + Send + Clone + 'static,
