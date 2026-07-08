@@ -1917,8 +1917,61 @@ impl Wallet {
                 }
             })
             .collect::<HashMap<Txid, u32>>();
+        let current_height = sign_options
+            .assume_height
+            .unwrap_or_else(|| self.chain.tip().height());
 
-        let mut finished = true;
+        Ok(self
+            .try_finalize_psbt_with(
+                psbt,
+                Some(current_height),
+                |_, input| {
+                    confirmation_heights
+                        .get(&input.previous_output.txid)
+                        .copied()
+                },
+                true,
+            )?
+            .is_finalized())
+    }
+
+    /// Attempt to finalize each input of a PSBT and return per-input finalization results.
+    ///
+    /// Use this method when you need to inspect why a specific input could not be finalized. Call
+    /// [`FinalizePsbtOutcome::is_finalized`] on the returned value to check whether all inputs are
+    /// finalized after the call.
+    ///
+    /// Per-input finalization failures are reported as [`FinalizeInputOutcome`] values. This method
+    /// only returns `Err` when the PSBT is malformed, for example if its inputs are out of bounds.
+    ///
+    /// Timelock satisfaction is evaluated from the PSBT transaction fields. This method does not
+    /// redact or clear output metadata.
+    pub fn try_finalize_psbt(
+        &self,
+        psbt: &mut Psbt,
+    ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError> {
+        self.try_finalize_psbt_with(psbt, None, |_, _| None, false)
+    }
+
+    fn try_finalize_psbt_with<F>(
+        &self,
+        psbt: &mut Psbt,
+        current_height: Option<u32>,
+        mut confirmation_height_for_input: F,
+        clear_output_derivations: bool,
+    ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError>
+    where
+        F: FnMut(usize, &bitcoin::TxIn) -> Option<u32>,
+    {
+        let tx = &psbt.unsigned_tx;
+        if psbt.inputs.len() < tx.input.len() {
+            return Err(IndexOutOfBoundsError::new(
+                psbt.inputs.len(),
+                psbt.inputs.len(),
+            ));
+        }
+
+        let mut outcomes = BTreeMap::new();
 
         for (n, input) in tx.input.iter().enumerate() {
             let psbt_input = &psbt
@@ -1926,14 +1979,9 @@ impl Wallet {
                 .get(n)
                 .ok_or(IndexOutOfBoundsError::new(n, psbt.inputs.len()))?;
             if psbt_input.final_script_sig.is_some() || psbt_input.final_script_witness.is_some() {
+                outcomes.insert(n, FinalizeInputOutcome::AlreadyFinalized);
                 continue;
             }
-            let confirmation_height = confirmation_heights
-                .get(&input.previous_output.txid)
-                .copied();
-            let current_height = sign_options
-                .assume_height
-                .unwrap_or_else(|| self.chain.tip().height());
 
             // - Try to derive the descriptor by looking at the txout. If it's in our database, we
             //   know exactly which `keychain` to use, and which derivation index it is.
@@ -1953,48 +2001,66 @@ impl Wallet {
             match desc {
                 Some(desc) => {
                     let mut tmp_input = bitcoin::TxIn::default();
-                    match desc.satisfy(
-                        &mut tmp_input,
-                        (
-                            PsbtInputSatisfier::new(psbt, n),
-                            After::new(Some(current_height), false),
-                            Older::new(Some(current_height), confirmation_height, false),
-                        ),
-                    ) {
+                    let satisfy_result = if let Some(current_height) = current_height {
+                        let confirmation_height = confirmation_height_for_input(n, input);
+                        desc.satisfy(
+                            &mut tmp_input,
+                            (
+                                PsbtInputSatisfier::new(psbt, n),
+                                After::new(Some(current_height), false),
+                                Older::new(Some(current_height), confirmation_height, false),
+                            ),
+                        )
+                    } else {
+                        desc.satisfy(&mut tmp_input, PsbtInputSatisfier::new(psbt, n))
+                    };
+
+                    match satisfy_result {
                         Ok(_) => {
                             let length = psbt.inputs.len();
-                            // Set the UTXO fields, final script_sig and witness
-                            // and clear everything else.
                             let psbt_input = psbt
                                 .inputs
                                 .get_mut(n)
                                 .ok_or(IndexOutOfBoundsError::new(n, length))?;
                             let original = mem::take(psbt_input);
-                            psbt_input.non_witness_utxo = original.non_witness_utxo;
-                            psbt_input.witness_utxo = original.witness_utxo;
-                            if !tmp_input.script_sig.is_empty() {
-                                psbt_input.final_script_sig = Some(tmp_input.script_sig);
-                            }
-                            if !tmp_input.witness.is_empty() {
-                                psbt_input.final_script_witness = Some(tmp_input.witness);
-                            }
+                            let final_script_sig =
+                                (!tmp_input.script_sig.is_empty()).then_some(tmp_input.script_sig);
+                            let final_script_witness =
+                                (!tmp_input.witness.is_empty()).then_some(tmp_input.witness);
+
+                            // BIP174 finalization clears input metadata except UTXOs, final
+                            // scripts, and opaque fields the finalizer does not understand.
+                            *psbt_input = bitcoin::psbt::Input {
+                                non_witness_utxo: original.non_witness_utxo,
+                                witness_utxo: original.witness_utxo,
+                                final_script_sig,
+                                final_script_witness,
+                                proprietary: original.proprietary,
+                                unknown: original.unknown,
+                                ..Default::default()
+                            };
+                            outcomes.insert(n, FinalizeInputOutcome::Finalized);
                         }
-                        Err(_) => finished = false,
+                        Err(err) => {
+                            outcomes.insert(n, FinalizeInputOutcome::CouldNotSatisfy(err));
+                        }
                     }
                 }
-                None => finished = false,
+                None => {
+                    outcomes.insert(n, FinalizeInputOutcome::MissingDescriptor);
+                }
             }
         }
 
-        // Clear derivation paths from outputs.
-        if finished {
+        let finalized = FinalizePsbtOutcome::new(outcomes);
+        if clear_output_derivations && finalized.is_finalized() {
             for output in &mut psbt.outputs {
                 output.bip32_derivation.clear();
                 output.tap_key_origins.clear();
             }
         }
 
-        Ok(finished)
+        Ok(finalized)
     }
 
     /// Return the secp256k1 context used for all signing operations.
