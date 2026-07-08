@@ -2028,8 +2028,8 @@ impl Wallet {
                             let final_script_witness =
                                 (!tmp_input.witness.is_empty()).then_some(tmp_input.witness);
 
-                            // BIP174 finalization clears input metadata except UTXOs, final scripts,
-                            // and opaque fields the finalizer does not understand.
+                            // BIP174 finalization clears input metadata except UTXOs, final
+                            // scripts, and opaque fields the finalizer does not understand.
                             *psbt_input = bitcoin::psbt::Input {
                                 non_witness_utxo: original.non_witness_utxo,
                                 witness_utxo: original.witness_utxo,
