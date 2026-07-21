@@ -7,6 +7,21 @@ Contributors do not need to change this file but do need to add changelog detail
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- feat(wallet): add unstable `Wallet::create_psbt` and `Wallet::replace_by_fee` behind the
+  `bdk-tx` cargo feature and the `--cfg bdk_wallet_unstable` rustc flag. These APIs are
+  explicitly **unstable**: breaking changes may land in minor releases without a semver bump.
+  To opt in, enable the `bdk-tx` feature **and** pass `--cfg bdk_wallet_unstable` to rustc,
+  for example via `RUSTFLAGS="--cfg bdk_wallet_unstable"` or by adding the following to your
+  workspace's `.cargo/config.toml`:
+  ```toml
+  [build]
+  rustflags = ["--cfg", "bdk_wallet_unstable"]
+  ```
+
 ## [v3.1.0]
 
 ### Added

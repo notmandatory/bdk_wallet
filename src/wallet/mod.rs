@@ -79,6 +79,28 @@ use crate::wallet::{
     tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
 };
+// Unstable bdk-tx imports — only active with --cfg bdk_wallet_unstable and feature = "bdk-tx".
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx", feature = "std"))]
+use bitcoin::secp256k1::rand;
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
+use {
+    crate::psbt::{AssetsExt, CreateTx, MustSpend, PsbtParams, ReplaceTx, SelectionStrategy},
+    crate::wallet::{
+        error::{CreatePsbtError, ReplaceByFeeError},
+        tx_builder::TxOrdering,
+    },
+    bdk_chain::Anchor,
+    bdk_tx::{
+        bdk_coin_select, selection_algorithm_lowest_fee_bnb, ChangeScript, ConfirmationStatus,
+        Finalizer, Input, InputCandidates, OriginalTxStats, Output, RbfParams, Selector,
+        SelectorParams,
+    },
+    bitcoin::relative,
+    miniscript::{
+        plan::{Assets, Plan},
+        ForEachKey,
+    },
+};
 
 // re-exports
 pub use bdk_chain::Balance;
@@ -87,8 +109,11 @@ pub use error::{LoadError, LoadMismatch};
 pub use event::*;
 pub use params::*;
 pub use persisted::*;
-pub use utils::IsDust;
-pub use utils::TxDetails;
+pub use utils::{IsDust, TxDetails};
+
+/// Alias [`FullTxOut`] with associated keychain and derivation index.
+#[allow(unused)]
+type IndexedTxOut = ((KeychainKind, u32), FullTxOut<ConfirmationBlockTime>);
 
 /// A Bitcoin wallet
 ///
@@ -787,6 +812,20 @@ impl Wallet {
                 self.tx_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+    }
+
+    /// List indexed [`FullTxOut`]s.
+    #[allow(unused)]
+    fn list_indexed_txouts(
+        &self,
+        params: CanonicalizationParams,
+    ) -> impl Iterator<Item = IndexedTxOut> + '_ {
+        self.tx_graph.graph().filter_chain_txouts(
+            &self.chain,
+            self.chain.tip().block_id(),
+            params,
+            self.tx_graph.index.outpoints().iter().cloned(),
+        )
     }
 
     /// Get the [`TxDetails`] of a wallet transaction.
@@ -2895,6 +2934,778 @@ impl Wallet {
     }
 }
 
+/// Maps a chain position to tx confirmation status, if `pos` is the confirmed
+/// variant.
+///
+/// - Returns None if the confirmation height or time is not a valid absolute [`Height`] or
+///   [`Time`].
+///
+/// [`Height`]: bitcoin::absolute::Height
+/// [`Time`]: bitcoin::absolute::Time
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
+fn status_from_position(pos: ChainPosition<ConfirmationBlockTime>) -> Option<ConfirmationStatus> {
+    if let ChainPosition::Confirmed { anchor, .. } = pos {
+        let conf_height = anchor.confirmation_height_upper_bound();
+        let height = absolute::Height::from_consensus(conf_height).ok()?;
+        // TODO: Currently BDK has no notion of MTP, we can use the confirmation block time for now.
+        let time =
+            absolute::Time::from_consensus(anchor.confirmation_time.try_into().ok()?).ok()?;
+        Some(ConfirmationStatus {
+            height,
+            prev_mtp: Some(time),
+        })
+    } else {
+        None
+    }
+}
+
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
+impl Wallet {
+    /// Return the "keys" assets, i.e. the ones we can trivially infer by scanning
+    /// the pubkeys of the wallet's descriptors.
+    fn assets(&self) -> Assets {
+        let mut pks = vec![];
+        for (_, desc) in self.keychains() {
+            desc.for_each_key(|k| {
+                pks.extend(k.clone().into_single_keys());
+                true
+            });
+        }
+
+        Assets::new().add(pks)
+    }
+
+    /// Peek at the next change address without revealing it, returning the auto-derived
+    /// change info `(keychain, index, spk)` alongside the [`ChangeScript`].
+    ///
+    /// The next change address is the next unused address of the change keychain, or the
+    /// next-to-be-revealed address **without** mutating wallet state. Revelation is deferred
+    /// until after all error paths have been cleared by the caller.
+    fn peek_change_info(&self) -> ((KeychainKind, u32, ScriptBuf), ChangeScript) {
+        let change_keychain = self.map_keychain(KeychainKind::Internal);
+        let (index, spk) = self
+            .tx_graph
+            .index
+            .unused_keychain_spks(change_keychain)
+            .next()
+            .unwrap_or_else(|| {
+                let (next_index, _) = self
+                    .tx_graph
+                    .index
+                    .next_index(change_keychain)
+                    .expect("keychain must exist");
+                let spk = self
+                    .peek_address(change_keychain, next_index)
+                    .script_pubkey();
+                (next_index, spk)
+            });
+        let descriptor = self
+            .public_descriptor(change_keychain)
+            .at_derivation_index(index)
+            .expect("should be valid derivation index");
+        (
+            (change_keychain, index, spk),
+            ChangeScript::from_descriptor(descriptor),
+        )
+    }
+
+    /// Parses the common parameters used during PSBT creation and returns the spend assets
+    /// and a map of indexed tx outputs.
+    fn parse_params<C>(
+        &self,
+        params: &PsbtParams<C>,
+    ) -> (Assets, HashMap<OutPoint, FullTxOut<ConfirmationBlockTime>>) {
+        // Get spend assets.
+        let assets = match params.assets {
+            None => self.assets(),
+            Some(ref params_assets) => {
+                let mut assets = Assets::new();
+                assets.extend(params_assets);
+                // Fill in the "keys" assets if none are provided.
+                if assets.keys.is_empty() {
+                    assets.extend(&self.assets());
+                }
+                assets
+            }
+        };
+
+        // Get wallet txouts.
+        let txouts = self
+            .list_indexed_txouts(params.canonical_params.clone())
+            .map(|(_, txo)| (txo.outpoint, txo))
+            .collect();
+
+        (assets, txouts)
+    }
+
+    /// Filters wallet `txos` by the spending criteria.
+    ///
+    /// - `policy`: Closure indicating whether the output should be kept, used by some callers to
+    ///   apply additional filters as in the case of RBF.
+    fn filter_spendable<'a, I, C, F>(
+        &'a self,
+        txos: I,
+        params: &'a PsbtParams<C>,
+        policy: F,
+    ) -> impl Iterator<Item = FullTxOut<ConfirmationBlockTime>> + 'a
+    where
+        I: IntoIterator<Item = FullTxOut<ConfirmationBlockTime>> + 'a,
+        F: Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + 'a,
+    {
+        let current_height = params.maturity_height.unwrap_or(self.chain.tip().height());
+        txos.into_iter().filter(move |txo| {
+            // Exclude outputs that are manually selected.
+            if params.set.contains(&txo.outpoint) {
+                return false;
+            }
+            // Filter outputs according to `policy` fn.
+            if !policy(txo) {
+                return false;
+            }
+            // Exclude locked UTXOs.
+            if self.is_outpoint_locked(txo.outpoint) {
+                return false;
+            }
+            // Exclude immature outputs.
+            if !txo.is_mature(current_height) {
+                return false;
+            }
+            // Exclude spent outputs.
+            if txo.spent_by.is_some() {
+                return false;
+            }
+            true
+        })
+    }
+
+    /// Maps the recipients of the `params` to a collection of target [`Output`]s.
+    fn target_outputs<C>(&self, params: &PsbtParams<C>) -> Vec<Output> {
+        params
+            .recipients
+            .iter()
+            .cloned()
+            .map(
+                |(script, value)| match self.tx_graph.index.index_of_spk(script.clone()) {
+                    Some(&(keychain, index)) => {
+                        let descriptor = self
+                            .public_descriptor(keychain)
+                            .at_derivation_index(index)
+                            .expect("should be valid derivation index");
+                        Output::with_descriptor(descriptor, value)
+                    }
+                    None => Output::with_script(script, value),
+                },
+            )
+            .collect()
+    }
+
+    /// Creates a PSBT with the given `params` and returns the updated [`Psbt`] and
+    /// [`Finalizer`].
+    ///
+    /// This function uses the thread-local random number generator (RNG) to generate
+    /// randomness. To supply your own source of entropy see [`Wallet::create_psbt_with_rng`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use std::str::FromStr;
+    /// # use bitcoin::{Amount, Address, FeeRate, OutPoint};
+    /// # use bdk_wallet::psbt::{PsbtParams, SelectionStrategy};
+    /// # let mut wallet = bdk_wallet::doctest_wallet!();
+    /// # let outpoint = OutPoint::null();
+    /// # let address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5").unwrap().assume_checked();
+    /// # let amount = Amount::ZERO;
+    /// let mut params = PsbtParams::default();
+    /// params
+    ///     .add_utxos(&[outpoint])
+    ///     .add_recipients([(address, amount)])
+    ///     .coin_selection(SelectionStrategy::SingleRandomDraw)
+    ///     .fee_rate(FeeRate::BROADCAST_MIN);
+    ///
+    /// let (psbt, finalizer) = wallet.create_psbt(params)?;
+    /// # Ok::<_, anyhow::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// A [`CreatePsbtError`] will be thrown if any of the following occurs
+    ///
+    /// - A manually selected input is missing from the wallet, or could not be planned
+    /// - The input value is insufficient to fund the outputs
+    /// - Failure to complete coin selection
+    /// - Failure to create or update the PSBT.
+    ///
+    /// # Change address
+    ///
+    /// When no [`ChangeScript`] is supplied via [`PsbtParams`], the wallet automatically selects
+    /// the next unused internal address and reveals it so that incoming change is tracked on
+    /// the next sync. The change address will not be marked used, so calling this function
+    /// again before syncing will use the same change address. If you intend to build
+    /// multiple transactions without syncing between them, either provide the change script in
+    /// the [`PsbtParams`], or do [`Wallet::mark_used`] after each call to prevent reuse.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    pub fn create_psbt(
+        &mut self,
+        params: PsbtParams<CreateTx>,
+    ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
+        self.create_psbt_with_rng(params, &mut rand::thread_rng())
+    }
+
+    /// Creates a PSBT with the given `params` and random number generator (RNG).
+    ///
+    /// Return the updated [`Psbt`] and [`Finalizer`].
+    ///
+    /// ## Parameters:
+    ///
+    /// - `params`: [`PsbtParams`]
+    /// - `rng`: Source of entropy, may be used during coin selection and to sort inputs and outputs
+    ///   by the [`TxOrdering`](crate::wallet::tx_builder::TxOrdering).
+    ///
+    /// See [`Wallet::create_psbt`] for notes on change address handling.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
+    pub fn create_psbt_with_rng(
+        &mut self,
+        mut params: PsbtParams<CreateTx>,
+        rng: &mut impl RngCore,
+    ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
+        // Only permit no recipients if we're doing a sweep and an explicit change script is
+        // provided.
+        if params.recipients.is_empty()
+            && !(matches!(params.coin_selection, SelectionStrategy::All)
+                && params.change_script.is_some())
+        {
+            return Err(CreatePsbtError::NoRecipients);
+        }
+        let (change_info, change_script) = params
+            .change_script
+            .take()
+            .map(|change_script| (None, change_script))
+            .unwrap_or_else(|| {
+                let (change_info, change_script) = self.peek_change_info();
+                (Some(change_info), change_script)
+            });
+
+        let (assets, txouts) = self.parse_params(&params);
+
+        let must_spend = self.build_must_spend_inputs(&params, &txouts, &assets)?;
+
+        // Get input candidates
+        let mut may_spend: Vec<Input> = if params.manually_selected_only {
+            vec![]
+        } else {
+            self.filter_spendable(txouts.into_values(), &params, |txo| {
+                (params.utxo_filter.0)(txo)
+            })
+            .flat_map(|txo| self.plan_input(&txo, &assets))
+            .collect()
+        };
+
+        // Apply fallback sequence to coin-selection candidates without a CSV requirement.
+        if let Some(seq) = params.fallback_sequence {
+            for input in &mut may_spend {
+                if input.sequence().is_none() {
+                    input.set_sequence(seq).map_err(CreatePsbtError::Sequence)?;
+                }
+            }
+        }
+
+        let target_outputs = self.target_outputs(&params);
+
+        let input_candidates = InputCandidates::new(must_spend, may_spend);
+        if input_candidates.inputs().next().is_none() {
+            let target_amount: Amount = target_outputs.iter().map(|output| output.value).sum();
+            let err = bdk_coin_select::InsufficientFunds {
+                missing: target_amount.to_sat(),
+            };
+            return Err(CreatePsbtError::InsufficientFunds(err));
+        }
+
+        let mut selector = Selector::new(
+            &input_candidates,
+            SelectorParams::new(params.fee_rate, target_outputs, change_script),
+        )
+        .map_err(CreatePsbtError::Selector)?;
+
+        let (psbt, finalizer) = self.create_psbt_from_selector(&mut selector, &params, rng)?;
+
+        // Reveal the auto-selected change address.
+        if let Some((keychain, index, spk)) = change_info {
+            if psbt
+                .unsigned_tx
+                .output
+                .iter()
+                .any(|txo| txo.script_pubkey == spk)
+            {
+                if let Some((_, index_changeset)) =
+                    self.tx_graph.index.reveal_to_target(keychain, index)
+                {
+                    self.stage.merge(index_changeset.into());
+                }
+            }
+        }
+
+        Ok((psbt, finalizer))
+    }
+
+    /// Create the PSBT from [`Selector`] and `params`.
+    ///
+    /// Internal method for handling coin selection and building the
+    /// resulting PSBT.
+    fn create_psbt_from_selector<C>(
+        &self,
+        selector: &mut Selector,
+        params: &PsbtParams<C>,
+        rng: &mut impl RngCore,
+    ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
+        // Select coins
+        match params.coin_selection {
+            SelectionStrategy::All => selector.select_all(),
+            SelectionStrategy::Custom { ref algorithm } => selector
+                .select_with_algorithm(|s| algorithm(s))
+                .map_err(CreatePsbtError::Selector)?,
+            SelectionStrategy::LowestFee {
+                longterm_feerate,
+                max_rounds,
+            } => {
+                selector
+                    .select_with_algorithm(selection_algorithm_lowest_fee_bnb(
+                        longterm_feerate,
+                        max_rounds,
+                    ))
+                    .map_err(CreatePsbtError::Bnb)?;
+            }
+            SelectionStrategy::SingleRandomDraw => {
+                // Implement a shuffle algorithm by associating every candidate with
+                // a random sort key.
+                selector.select_with_algorithm(|selector| -> Result<_, CreatePsbtError> {
+                    let n = selector.inner().candidates().count();
+                    let keys: Vec<u32> = (0..n).map(|_| rng.next_u32()).collect();
+                    selector
+                        .inner_mut()
+                        .sort_candidates_by(|(a, _), (b, _)| keys[a].cmp(&keys[b]));
+                    selector
+                        .select_until_target_met()
+                        .map_err(CreatePsbtError::InsufficientFunds)
+                })?
+            }
+        };
+        let mut selection = selector.try_finalize().ok_or({
+            let e = bdk_tx::CannotMeetTarget;
+            CreatePsbtError::Selector(bdk_tx::SelectorError::CannotMeetTarget(e))
+        })?;
+
+        // Change fell below the dust threshold and was dropped to fees, leaving
+        // the transaction with no outputs.
+        if selection.outputs().is_empty() {
+            return Err(CreatePsbtError::AllOutputsBelowDust);
+        }
+
+        match &params.ordering {
+            TxOrdering::Untouched => {}
+            TxOrdering::Shuffle => {
+                selection.shuffle_inputs(rng);
+                selection.shuffle_outputs(rng);
+            }
+            TxOrdering::Custom {
+                input_sort,
+                output_sort,
+            } => {
+                selection.sort_inputs_by(|a, b| input_sort(a, b));
+                selection.sort_outputs_by(|a, b| output_sort(a, b));
+            }
+        }
+
+        let version = params.version.unwrap_or(transaction::Version::TWO);
+        let min_locktime = params.min_locktime.unwrap_or(absolute::LockTime::ZERO);
+
+        // Create psbt
+        let mut psbt = selection
+            .create_psbt_with_rng(
+                bdk_tx::PsbtParams {
+                    version,
+                    min_locktime,
+                    mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
+                    anti_fee_sniping: params.anti_fee_sniping,
+                },
+                rng,
+            )
+            .map_err(CreatePsbtError::Psbt)?;
+
+        // Add global xpubs.
+        if params.add_global_xpubs {
+            for xpub in self
+                .keychains()
+                .flat_map(|(_, desc)| desc.get_extended_keys())
+            {
+                let origin = match xpub.origin {
+                    Some(origin) => origin,
+                    None if xpub.xkey.depth == 0 => {
+                        (xpub.root_fingerprint(&self.secp), vec![].into())
+                    }
+                    _ => return Err(CreatePsbtError::MissingKeyOrigin(xpub.xkey)),
+                };
+
+                psbt.xpub.insert(xpub.xkey, origin);
+            }
+        }
+
+        let finalizer = selection.into_finalizer();
+
+        Ok((psbt, finalizer))
+    }
+
+    /// Creates a Replace-By-Fee transaction (RBF) and returns the updated [`Psbt`] and
+    /// [`Finalizer`].
+    ///
+    /// This function uses the thread-local random number generator (RNG) to generate
+    /// randomness. To supply your own source of entropy see [`Wallet::replace_by_fee_with_rng`].
+    ///
+    /// # Errors
+    ///
+    /// A [`ReplaceByFeeError`] will be thrown if any of the following occurs
+    ///
+    /// - An original transaction is already confirmed
+    /// - An original transaction is missing from the wallet
+    /// - Failure to calculate the [fee](Wallet::calculate_fee) of an original transaction
+    /// - Failure to complete coin selection
+    /// - Failure to create or update the PSBT.
+    ///
+    /// # Change address
+    ///
+    /// When no [`ChangeScript`] is supplied via [`PsbtParams`], the wallet automatically selects
+    /// the next unused internal address and reveals it so that incoming change is tracked on
+    /// the next sync. The change address will not be marked used, so calling this function
+    /// again before syncing will use the same change address. If you intend to build
+    /// multiple transactions without syncing between them, either provide the change script in
+    /// the [`PsbtParams`], or do [`Wallet::mark_used`] after each call to prevent reuse.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    pub fn replace_by_fee(
+        &mut self,
+        params: PsbtParams<ReplaceTx>,
+    ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
+        self.replace_by_fee_with_rng(params, &mut rand::thread_rng())
+    }
+
+    /// Creates a Replace-By-Fee transaction (RBF) and returns the updated [`Psbt`] and
+    /// [`Finalizer`].
+    ///
+    /// ## Parameters:
+    ///
+    /// - `params`: [`PsbtParams`]
+    /// - `rng`: Source of entropy, may be used during coin selection and to sort inputs and outputs
+    ///   by the [`TxOrdering`](crate::wallet::tx_builder::TxOrdering).
+    ///
+    /// See [`Wallet::replace_by_fee`] for notes on change address handling.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
+    pub fn replace_by_fee_with_rng(
+        &mut self,
+        mut params: PsbtParams<ReplaceTx>,
+        rng: &mut impl RngCore,
+    ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
+        if params.replace.is_empty() {
+            return Err(ReplaceByFeeError::NoOriginalTransactions);
+        }
+        // Only permit no recipients if we're doing a sweep and an explicit change script is
+        // provided.
+        if params.recipients.is_empty()
+            && !(matches!(params.coin_selection, SelectionStrategy::All)
+                && params.change_script.is_some())
+        {
+            return Err(ReplaceByFeeError::CreatePsbt(CreatePsbtError::NoRecipients));
+        }
+        let (change_info, change_script) = params
+            .change_script
+            .take()
+            .map(|change_script| (None, change_script))
+            .unwrap_or_else(|| {
+                let (change_info, change_script) = self.peek_change_info();
+                (Some(change_info), change_script)
+            });
+
+        let (assets, txouts) = self.parse_params(&params);
+
+        let PsbtParams {
+            replace: txids_to_replace,
+            ..
+        } = &params;
+
+        // None of the txids-to-replace may already be confirmed
+        let chain_tip = self.chain.tip().block_id();
+        let chain_positions: HashMap<Txid, ChainPosition<_>> = self
+            .tx_graph
+            .graph()
+            .list_canonical_txs(&self.chain, chain_tip, params.canonical_params.clone())
+            .map(|canonical_tx| (canonical_tx.tx_node.txid, canonical_tx.chain_position))
+            .collect();
+        for &txid in txids_to_replace.iter() {
+            if chain_positions
+                .get(&txid)
+                .is_some_and(|chain_position| chain_position.is_confirmed())
+            {
+                return Err(ReplaceByFeeError::TransactionConfirmed(txid));
+            }
+        }
+
+        // For each txid being replaced, verify that at least one of its original inputs
+        // remains in the selected set. A replacement must conflict with every transaction it
+        // replaces — two transactions cannot spend the same UTXO.
+        for &txid in txids_to_replace.iter() {
+            if let Some(tx) = self.tx_graph.graph().get_tx(txid) {
+                if !tx
+                    .input
+                    .iter()
+                    .any(|txin| params.set.contains(&txin.previous_output))
+                {
+                    return Err(ReplaceByFeeError::NoInputsFromOriginal(txid));
+                }
+            }
+        }
+
+        // Txs and their descendants to be replaced
+        //
+        // `direct_conflicts` are the transactions named in `params.replace`. Only these
+        // feed into `original_txs` for the RBF fee rate floor.
+        //
+        // `to_replace` also includes walked descendants so they are excluded from coin
+        // selection; their fees accumulate into `descendant_fee`.
+        let direct_conflicts: HashSet<Txid> = txids_to_replace.iter().copied().collect();
+
+        let descendants: HashSet<Txid> = direct_conflicts
+            .iter()
+            .flat_map(|&txid| {
+                self.tx_graph
+                    .graph()
+                    .walk_descendants(txid, |_, txid| Some(txid))
+            })
+            .filter(|txid| !direct_conflicts.contains(txid))
+            .collect();
+
+        let to_replace: HashSet<Txid> = direct_conflicts
+            .iter()
+            .chain(descendants.iter())
+            .copied()
+            .collect();
+
+        let must_spend = self.build_must_spend_inputs(&params, &txouts, &assets)?;
+
+        // Validate that no manually-selected input spends an output of a transaction
+        // in `to_replace`.
+        for input in &must_spend {
+            let op = input.prev_outpoint();
+            if to_replace.contains(&op.txid) {
+                return Err(ReplaceByFeeError::ConflictingInput(op));
+            }
+        }
+
+        // Get input candidates
+        let mut may_spend: Vec<Input> = if params.manually_selected_only {
+            vec![]
+        } else {
+            self.filter_spendable(txouts.into_values(), &params, |txo| {
+                // To be included for coin selection the UTXO
+                // - must not be contained in `to_replace`
+                // - must be confirmed per replacement policy Rule 2 (removed in Core v31)
+                // - must pass a user-defined filter
+                !to_replace.contains(&txo.outpoint.txid)
+                    && txo.chain_position.is_confirmed()
+                    && (params.utxo_filter.0)(txo)
+            })
+            .flat_map(|txo| self.plan_input(&txo, &assets))
+            .collect()
+        };
+
+        // Apply fallback sequence to coin-selection candidates without a CSV requirement.
+        if let Some(seq) = params.fallback_sequence {
+            for input in &mut may_spend {
+                if input.sequence().is_none() {
+                    input.set_sequence(seq).map_err(CreatePsbtError::Sequence)?;
+                }
+            }
+        }
+
+        let target_outputs = self.target_outputs(&params);
+
+        let input_candidates = InputCandidates::new(must_spend, may_spend);
+        if input_candidates.inputs().next().is_none() {
+            let target_amount: Amount = target_outputs.iter().map(|output| output.value).sum();
+            let err = bdk_coin_select::InsufficientFunds {
+                missing: target_amount.to_sat(),
+            };
+            return Err(CreatePsbtError::InsufficientFunds(err))?;
+        }
+
+        let original_txs: Vec<OriginalTxStats> = direct_conflicts
+            .iter()
+            .map(|&txid| -> Result<_, ReplaceByFeeError> {
+                let tx = self
+                    .tx_graph
+                    .graph()
+                    .get_tx(txid)
+                    .ok_or(ReplaceByFeeError::MissingTransaction(txid))?;
+                let fee = self
+                    .calculate_fee(&tx)
+                    .map_err(ReplaceByFeeError::PreviousFee)?;
+                Ok(OriginalTxStats {
+                    weight: tx.weight(),
+                    fee,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        // Sum fees from all descendants known to the tx graph. This assumes every
+        // descendant is currently in the mempool, which could slightly overestimate
+        // the fee floor if a descendant was evicted or never relayed.
+        let descendant_fee: Amount = descendants
+            .iter()
+            .filter_map(|&txid| {
+                let tx = self.tx_graph.graph().get_tx(txid)?;
+                self.calculate_fee(&tx).ok()
+            })
+            .sum();
+
+        let rbf_params = RbfParams {
+            original_txs,
+            descendant_fee,
+            incremental_relay_feerate: FeeRate::BROADCAST_MIN,
+        };
+
+        let mut selector = Selector::new(
+            &input_candidates,
+            SelectorParams {
+                replace: Some(rbf_params),
+                ..SelectorParams::new(params.fee_rate, target_outputs, change_script)
+            },
+        )
+        .map_err(CreatePsbtError::Selector)?;
+
+        let (psbt, finalizer) = self
+            .create_psbt_from_selector(&mut selector, &params, rng)
+            .map_err(ReplaceByFeeError::CreatePsbt)?;
+
+        // Reveal the auto-selected change address
+        if let Some((keychain, index, spk)) = change_info {
+            if psbt
+                .unsigned_tx
+                .output
+                .iter()
+                .any(|txo| txo.script_pubkey == spk)
+            {
+                if let Some((_, index_changeset)) =
+                    self.tx_graph.index.reveal_to_target(keychain, index)
+                {
+                    self.stage.merge(index_changeset.into());
+                }
+            }
+        }
+
+        Ok((psbt, finalizer))
+    }
+
+    /// Builds the required inputs from the manually-selected spends in `params`.
+    ///
+    /// Wallet outpoints are planned into [`Input`]s in insertion order, then any per-input
+    /// sequence override or the fallback sequence is applied. Pre-built planned inputs are kept
+    /// in that same insertion order.
+    fn build_must_spend_inputs<C>(
+        &self,
+        params: &PsbtParams<C>,
+        txouts: &HashMap<OutPoint, FullTxOut<ConfirmationBlockTime>>,
+        assets: &Assets,
+    ) -> Result<Vec<Input>, CreatePsbtError> {
+        params
+            .must_spend
+            .iter()
+            .map(|item| match item {
+                MustSpend::Utxo(outpoint) => {
+                    let txo = txouts
+                        .get(outpoint)
+                        .ok_or(CreatePsbtError::UnknownUtxo(*outpoint))?;
+                    let mut input = self
+                        .plan_input(txo, assets)
+                        .ok_or(CreatePsbtError::Plan(*outpoint))?;
+                    if let Some(&seq) = params.sequence_overrides.get(outpoint) {
+                        input.set_sequence(seq).map_err(CreatePsbtError::Sequence)?;
+                    } else if let Some(seq) = params.fallback_sequence {
+                        if input.sequence().is_none() {
+                            input.set_sequence(seq).map_err(CreatePsbtError::Sequence)?;
+                        }
+                    }
+                    Ok(input)
+                }
+                MustSpend::Planned(input) => Ok(input.clone()),
+            })
+            .collect()
+    }
+
+    /// Plan the output with the available assets and return a new [`Input`] if possible. See also
+    /// [`Self::try_plan`].
+    fn plan_input(
+        &self,
+        txo: &FullTxOut<ConfirmationBlockTime>,
+        spend_assets: &Assets,
+    ) -> Option<Input> {
+        let op = txo.outpoint;
+        let txid = op.txid;
+
+        // We want to afford the output with as many assets as we can. The plan
+        // will use only the ones needed to produce the minimum satisfaction.
+        let cur_height = self.latest_checkpoint().height();
+        let abs_locktime = spend_assets
+            .absolute_timelock
+            .unwrap_or(absolute::LockTime::from_consensus(cur_height));
+
+        let rel_locktime = spend_assets.relative_timelock.unwrap_or_else(|| {
+            let age = match txo.chain_position.confirmation_height_upper_bound() {
+                Some(conf_height) => cur_height
+                    .saturating_add(1)
+                    .saturating_sub(conf_height)
+                    .try_into()
+                    .unwrap_or(u16::MAX),
+                None => 0,
+            };
+            relative::LockTime::from_height(age)
+        });
+
+        let mut assets = Assets::new();
+        assets.extend(spend_assets);
+        assets = assets.after(abs_locktime);
+        assets = assets.older(rel_locktime);
+
+        let plan = self.try_plan(op, &assets)?;
+        let tx = self.tx_graph.graph().get_tx(txid)?;
+        let tx_status = status_from_position(txo.chain_position);
+
+        Input::from_prev_tx(plan, tx, op.vout as usize, tx_status).ok()
+    }
+
+    /// Attempt to create a spending plan for the UTXO of the given `outpoint`
+    /// with the provided `assets`.
+    ///
+    /// Return `None` if `outpoint` doesn't correspond to an indexed txout, or
+    /// if the assets are not sufficient to create a plan.
+    fn try_plan(&self, outpoint: OutPoint, assets: &Assets) -> Option<Plan> {
+        let indexer = &self.tx_graph.index;
+        let ((keychain, index), _) = indexer.txout(outpoint)?;
+        let def_desc = indexer
+            .get_descriptor(keychain)?
+            .at_derivation_index(index)
+            .expect("must be valid derivation index");
+        def_desc.plan(assets).ok()
+    }
+}
+
 impl AsRef<bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime>> for Wallet {
     fn as_ref(&self) -> &bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime> {
         self.tx_graph.graph()
@@ -3024,7 +3835,7 @@ macro_rules! floating_rate {
 /// Macro for getting a [`Wallet`] for use in a doctest.
 macro_rules! doctest_wallet {
     () => {{
-        use $crate::bitcoin::{BlockHash, Transaction, absolute, TxOut, Network, hashes::Hash};
+        use $crate::bitcoin::{transaction, absolute, Amount, BlockHash, Transaction, TxOut, Network, hashes::Hash};
         use $crate::chain::{ConfirmationBlockTime, BlockId, TxGraph, tx_graph};
         use $crate::{Update, KeychainKind, Wallet};
         use $crate::test_utils::*;
