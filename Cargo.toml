@@ -82,3 +82,11 @@ name = "esplora_blocking"
 [[example]]
 name = "bitcoind_rpc"
 
+[[example]]
+name = "psbt"
+required-features = ["bdk-tx"]
+
+[[example]]
+name = "replace_by_fee"
+required-features = ["bdk-tx"]
+
