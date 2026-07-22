@@ -1,6 +1,7 @@
-use bdk_wallet::bitcoin::{Amount, FeeRate, Psbt, TxIn};
+use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{psbt, KeychainKind, SignOptions};
+use bitcoin::{Amount, FeeRate, Psbt, TxIn};
 use core::str::FromStr;
 
 // from bip 174

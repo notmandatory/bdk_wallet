@@ -17,6 +17,11 @@ use bitcoin::FeeRate;
 use bitcoin::Psbt;
 use bitcoin::TxOut;
 
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
+mod params;
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
+pub use params::*;
+
 // TODO upstream the functions here to `rust-bitcoin`?
 
 /// Trait to add functions to extract utxos and calculate fees.
