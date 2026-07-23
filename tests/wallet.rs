@@ -4,6 +4,7 @@ use std::sync::Arc;
 use assert_matches::assert_matches;
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 use bdk_wallet::coin_selection;
+use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError, IntoWalletDescriptor};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
@@ -3330,4 +3331,142 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering_bnb_success() {
         vec![outpoint_0, outpoint_1],
         "UTXOs should be ordered with required first, then selected"
     );
+}
+
+#[test]
+fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("should create wallet successfully!");
+
+    // establish a chain tip so confirmed funds can be anchored to a block in the active chain.
+    let block = BlockId {
+        height: 1_000,
+        hash: BlockHash::all_zeros(),
+    };
+    insert_checkpoint(&mut wallet, block);
+    let anchor = ConfirmationBlockTime {
+        block_id: block,
+        confirmation_time: 0,
+    };
+
+    // add funds to the wallet (two 250k sats confirmed UTXOs)
+    receive_output(&mut wallet, Amount::from_sat(250_000), anchor);
+    receive_output(&mut wallet, Amount::from_sat(250_000), anchor);
+
+    let balance = wallet.balance();
+    assert_eq!(
+        balance.total(),
+        Amount::from_sat(500_000),
+        "wallet balance SHOULD be 500K after funding"
+    );
+
+    // Should be able to create TRUC (v3) transactions.
+    // NOTE: "A TRUC transaction can spend outputs from confirmed non-TRUC transactions. A non-TRUC
+    // transaction can spend outputs from confirmed TRUC transactions" See, rule #2: https://github.com/bitcoin/bips/blob/master/bip-0431.mediawiki#specification
+
+    // create txA (TRUC)
+    let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(125_000));
+    builder.version(3);
+
+    let mut psbt = builder.finish().expect("should create txA (TRUC) successfully! as per BIP-431 it can spend confirmed outputs from non-TRUC txs.");
+
+    let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+    let tx_a = psbt.extract_tx()?;
+    let txid_a = tx_a.compute_txid();
+
+    // "broadcast" txA (TRUC): insert it into the wallet's local view as an unconfirmed tx.
+    insert_tx(&mut wallet, tx_a);
+
+    let balance = wallet.balance();
+    assert_eq!(
+        balance.untrusted_pending,
+        Amount::from_sat(125_000),
+        "wallet balance SHOULD have 125K unconfirmed (TRUC) UTXO after txA!"
+    );
+
+    // create txB (non-TRUC)
+    let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(125_000));
+
+    let mut psbt = builder
+        .finish()
+        .expect("SHOULD create txB (non-TRUC) successfully! However, a non-TRUC transaction can only spend confirmed outputs from TRUC transactions");
+
+    let _ = wallet.sign(&mut psbt, SignOptions::default());
+    let tx_b = psbt.extract_tx()?;
+
+    // txB MUST NOT use the available unconfirmed TRUC UTXO.
+    assert!(
+        tx_b.input
+            .iter()
+            .all(|txin| txin.previous_output.txid.ne(&txid_a)),
+        "SHOULD NOT try to spend an unconfirmed TRUC output in a non-TRUC tx!"
+    );
+
+    // "broadcast" txB (non-TRUC)
+    let txid_b = tx_b.compute_txid();
+    insert_tx(&mut wallet, tx_b);
+
+    let balance = wallet.balance();
+    assert_eq!(
+        balance.untrusted_pending,
+        Amount::from_sat(250_000),
+        "wallet balance SHOULD have 250K unconfirmed, both non-TRUC (txB) and TRUC (txA) UTXOs after txB!"
+    );
+
+    // create txC (TRUC)
+    let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(200_000));
+    builder.version(3);
+
+    let mut psbt = builder.finish().expect("should create txC (TRUC) successfully! as per BIP-431 it can spend unconfirmed outputs from TRUC txs.");
+
+    let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+    let tx_c = psbt.extract_tx()?;
+
+    // txC MUST ONLY use the available confirmed UTXOs AND/OR unconfirmed TRUC UTXOs.
+    assert!(
+        tx_c.input
+            .iter()
+            .all(|txin| txin.previous_output.txid.ne(&txid_b)),
+        "SHOULD NOT try to spend an unconfirmed non-TRUC output in a TRUC tx!"
+    );
+
+    // "broadcast" txC (TRUC)
+    insert_tx(&mut wallet, tx_c);
+
+    let balance = wallet.balance();
+    assert_eq!(
+        balance.untrusted_pending,
+        Amount::from_sat(325_000),
+        "wallet balance SHOULD have 325K unconfirmed UTXOs after txC!"
+    );
+
+    // create txD (non-TRUC)
+    let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(400_000));
+
+    let psbt = builder.finish();
+
+    assert!(
+        matches!(
+            psbt,
+            Err(CreateTxError::CoinSelection(InsufficientFunds { .. }))
+        ),
+        "SHOULD fail if it's trying to spend an unconfirmed TRUC output in a non-TRUC tx!"
+    );
+
+    Ok(())
 }
