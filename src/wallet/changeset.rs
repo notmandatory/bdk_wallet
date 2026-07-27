@@ -424,6 +424,7 @@ impl From<locked_outpoints::ChangeSet> for ChangeSet {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     // Tests that merging `ChangeSet`s with write-once fields follows "first write wins" semantics
