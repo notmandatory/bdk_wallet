@@ -8,7 +8,7 @@ use bdk_chain::ConfirmationBlockTime;
 use bdk_wallet::psbt::{PsbtParams, SelectionStrategy::*};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind::External, Wallet};
-use bitcoin::{consensus, secp256k1::rand, Address, Amount, TxIn, TxOut};
+use bitcoin::{Address, Amount, TxIn, TxOut, consensus, secp256k1::rand};
 use rand::Rng;
 
 // This example shows how to create a PSBT using BDK Wallet.

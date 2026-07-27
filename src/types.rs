@@ -17,7 +17,7 @@ use core::fmt;
 use crate::collections::BTreeMap;
 
 use bitcoin::transaction::{OutPoint, Sequence, TxOut};
-use bitcoin::{psbt, Weight};
+use bitcoin::{Weight, psbt};
 
 use serde::{Deserialize, Serialize};
 
@@ -224,8 +224,8 @@ impl core::error::Error for IndexOutOfBoundsError {}
 mod tests {
     use super::*;
     use bitcoin::{
-        absolute, transaction, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
-        Witness,
+        Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, absolute,
+        transaction,
     };
 
     fn build_tx(txout: TxOut) -> Transaction {
