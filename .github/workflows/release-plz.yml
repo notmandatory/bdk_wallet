@@ -9,7 +9,7 @@ name: Release-plz
 #
 # 1. The `release-pr` job opens/updates a release PR (branch prefix `release-plz-`)
 #    with the version bump and changelog update, targeting the selected branch,
-#    authored by the `bitcoindevkit-release-plz` GitHub App. The version bump is
+#    authored by the `notmandatory-release-plz` GitHub App. The version bump is
 #    computed from that branch's Cargo.toml. Re-run it to refresh the release PR
 #    after new commits land on the branch.
 # 2. The `release` job checks whether the release PR has been merged. If so, it
@@ -38,7 +38,7 @@ jobs:
   release-pr:
     name: Create/Update Rust Release PR
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'bitcoindevkit' }}
+    if: ${{ github.repository_owner == 'notmandatory' }}
     permissions:
       contents: write # push the release PR branch
       pull-requests: write # open and update the release PR
@@ -75,6 +75,7 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUSTDOCFLAGS: "--cfg bdk_wallet_unstable"
 
   # If the release PR was merged, publish the unpublished crate to crates.io,
   # tag it, and create its GitHub release. Gated by the `release` environment
@@ -82,7 +83,7 @@ jobs:
   release:
     name: Publish Rust Release
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'bitcoindevkit' }}
+    if: ${{ github.repository_owner == 'notmandatory' }}
     environment: release
     permissions:
       contents: write # push tags and create GitHub releases
