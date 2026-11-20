@@ -7,6 +7,22 @@ This file is updated automatically by [release-plz](https://release-plz.dev) fro
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wallet-3.2.1](https://github.com/bitcoindevkit/bdk_wallet/compare/wallet-3.2.0...wallet-3.2.1)
+
+### Changed
+
+- Raise the `miniscript` requirement to `12.3.8` ([#620](https://github.com/bitcoindevkit/bdk_wallet/pull/620))
+
+### Fixed
+
+- Fix `Wallet::mark_used` and `Wallet::unmark_used` doing nothing on single-descriptor wallets when passed `KeychainKind::Internal` ([#648](https://github.com/bitcoindevkit/bdk_wallet/pull/648))
+- Fix signing of PSBTs that mix Taproot and non-Taproot inputs ([#643](https://github.com/bitcoindevkit/bdk_wallet/pull/643))
+- Reject missing Taproot witness UTXOs before signing ANYONECANPAY inputs, so a failed check no longer leaves earlier inputs partially signed ([#651](https://github.com/bitcoindevkit/bdk_wallet/pull/651))
+- Make `TxBuilder::add_foreign_utxo` and `TxBuilder::add_foreign_utxo_with_sequence` replace `witness_utxo` with the prevout verified from `non_witness_utxo` ([#636](https://github.com/bitcoindevkit/bdk_wallet/pull/636))
+- Fail signing with `SignerError::InvalidNonWitnessUtxo` when `witness_utxo` and `non_witness_utxo` disagree ([#636](https://github.com/bitcoindevkit/bdk_wallet/pull/636))
+- Return `BuildFeeBumpError::TransactionNotFound` instead of panicking when fee-bumping a legacy foreign input without its parent transaction ([#636](https://github.com/bitcoindevkit/bdk_wallet/pull/636))
+- Validate the hardness of the final derivation step against the descriptor wildcard when signing with an xprv ([#629](https://github.com/bitcoindevkit/bdk_wallet/pull/629))
+
 ## [wallet-3.2.0]
 
 ### Added
@@ -1369,7 +1385,7 @@ final transaction is created by calling `finish` on the builder.
 #### Security
 - Use dirs-next instead of dirs since the latter is unmaintained
 
-## [0.1.0-beta.1] - 2020-09-08
+## [0.1.0-beta.1]
 
 ### Blockchain
 #### Added
